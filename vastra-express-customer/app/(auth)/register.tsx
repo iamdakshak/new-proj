@@ -114,7 +114,7 @@ export default function RegisterScreen() {
       });
       const { accessToken, user } = res.data;
       await setAuth(user, accessToken);
-      router.replace('/(tabs)/home');
+      // AuthGate will detect user and redirect to home
     } catch (err: any) {
       setError(err.message || 'Registration failed');
     } finally {

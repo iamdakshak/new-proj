@@ -48,8 +48,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "dbb631fe-c648-4434-9f2c-0717a910f278"
+        "projectId": "5e2a68ac-4e2e-44bd-b149-d8b8f98abaa9"
       }
-    }
+    },
+    "owner": "yashiam"
   }
 }
