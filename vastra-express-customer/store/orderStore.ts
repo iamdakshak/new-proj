@@ -1,0 +1,172 @@
+import { create } from 'zustand';
+import api from '@/lib/api';
+import type {
+  Order,
+  PickupSlot,
+  ServiceType,
+  OrderStatusHistory,
+  FacilityOption,
+  FacilityOptionsResponse,
+} from '@/types';
+
+interface CreateOrderPayload {
+  addressId: number;
+  pickupSlotId: number;
+  serviceType: ServiceType;
+  isExpress?: boolean;
+  customerNotes?: string;
+}
+
+interface OrderState {
+  orders: Order[];
+  activeOrder: Order | null;
+  statusHistory: OrderStatusHistory[];
+  availableSlots: PickupSlot[];
+  facilityOptions: FacilityOption[];
+  isLoading: boolean;
+  isSlotsLoading: boolean;
+  isFacilitiesLoading: boolean;
+  error: string | null;
+  facilityError: string | null;
+
+  fetchOrders: (status?: 'active' | 'completed') => Promise<void>;
+  fetchOrderById: (id: number) => Promise<void>;
+  fetchStatusHistory: (id: number) => Promise<void>;
+  fetchAvailableSlots: (date: string, facilityId?: number) => Promise<void>;
+  fetchFacilityOptions: (addressId: number, pickupDate: string) => Promise<void>;
+  createOrder: (data: CreateOrderPayload) => Promise<Order>;
+  cancelOrder: (id: number, notes?: string) => Promise<void>;
+  clearActiveOrder: () => void;
+  clearError: () => void;
+}
+
+export const useOrderStore = create<OrderState>((set, get) => ({
+  orders: [],
+  activeOrder: null,
+  statusHistory: [],
+  availableSlots: [],
+  facilityOptions: [],
+  isLoading: false,
+  isSlotsLoading: false,
+  isFacilitiesLoading: false,
+  error: null,
+  facilityError: null,
+
+  fetchOrders: async (filter) => {
+    set({ isLoading: true, error: null });
+    try {
+      const params: Record<string, string> = { limit: '50' };
+      if (filter === 'active') {
+        // fetch without status filter — we'll filter client-side
+      }
+      const res = await api.get('/orders', { params });
+      const raw: any[] = res.data.data ?? res.data;
+      const orders = raw.map((o: any) => ({
+        ...o,
+        status: o.currentStatus ?? o.status,
+        items: o.orderItems ?? o.items ?? [],
+      }));
+      set({ orders, isLoading: false });
+    } catch (e: any) {
+      set({ isLoading: false, error: e.message });
+    }
+  },
+
+  fetchOrderById: async (id) => {
+    set({ isLoading: true, error: null });
+    try {
+      const res = await api.get(`/orders/${id}`);
+      const raw = res.data;
+      const normalized = {
+        ...raw,
+        status: raw.currentStatus ?? raw.status,
+        items: raw.orderItems ?? raw.items ?? [],
+      };
+      set({ activeOrder: normalized, isLoading: false });
+    } catch (e: any) {
+      set({ isLoading: false, error: e.message });
+    }
+  },
+
+  fetchStatusHistory: async (id) => {
+    try {
+      const res = await api.get(`/orders/${id}/history`);
+      set({ statusHistory: res.data });
+    } catch {
+      // non-fatal
+    }
+  },
+
+  fetchAvailableSlots: async (date, facilityId) => {
+    set({ isSlotsLoading: true });
+    try {
+      const params: Record<string, string | number> = { date };
+      if (facilityId) params.facilityId = facilityId;
+      const res = await api.get('/pickup-slots/available', { params });
+      set({ availableSlots: res.data, isSlotsLoading: false });
+    } catch {
+      set({ availableSlots: [], isSlotsLoading: false });
+    }
+  },
+
+  fetchFacilityOptions: async (addressId, pickupDate) => {
+    set({ isFacilitiesLoading: true, facilityError: null });
+    try {
+      const res = await api.get<FacilityOptionsResponse>('/facility-allocator/options', {
+        params: { addressId, pickupDate },
+      });
+      const options = res.data?.options ?? [];
+      set({
+        facilityOptions: options,
+        facilityError: res.data?.serviceable ? null : res.data?.message ?? null,
+        isFacilitiesLoading: false,
+      });
+    } catch (e: any) {
+      set({
+        facilityOptions: [],
+        facilityError: e?.message ?? 'Service not available in your area yet.',
+        isFacilitiesLoading: false,
+      });
+    }
+  },
+
+  createOrder: async (data) => {
+    set({ isLoading: true, error: null });
+    try {
+      const res = await api.post('/orders', data);
+      const raw = res.data;
+      const normalized = {
+        ...raw,
+        status: raw.currentStatus ?? raw.status,
+        items: raw.orderItems ?? raw.items ?? [],
+      };
+      set((s) => ({ orders: [normalized, ...s.orders], isLoading: false }));
+      return normalized;
+    } catch (e: any) {
+      set({ isLoading: false, error: e.message });
+      throw e;
+    }
+  },
+
+  cancelOrder: async (id, notes) => {
+    try {
+      const res = await api.patch(`/orders/${id}/cancel`, notes ? { notes } : {});
+      const raw = res.data;
+      const normalized = {
+        ...raw,
+        status: raw.currentStatus ?? raw.status,
+        items: raw.orderItems ?? raw.items ?? [],
+      };
+      
+      set((s) => ({
+        orders: s.orders.map((o) => (o.id === id ? normalized : o)),
+        activeOrder: s.activeOrder?.id === id ? normalized : s.activeOrder,
+      }));
+    } catch (e: any) {
+      throw e;
+    }
+  },
+
+  clearActiveOrder: () => set({ activeOrder: null, statusHistory: [] }),
+  clearError: () => set({ error: null }),
+}));

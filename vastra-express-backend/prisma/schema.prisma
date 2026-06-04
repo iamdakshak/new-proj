@@ -1,0 +1,298 @@
+// Vastra Express - Prisma Schema
+// Database: MySQL 8.0
+// Source: IMPLEMENTATION_GUIDE.md - Database Schema Design
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// 1. USERS & AUTHENTICATION
+// ============================================
+
+model Role {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique // CUSTOMER, ADMIN, FACILITY_STAFF, DRIVER
+  permissions Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  users User[]
+
+  @@map("roles")
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  mobileNumber String   @unique @map("mobile_number") @db.VarChar(15)
+  customerId   String?  @unique @map("customer_id") @db.VarChar(20) // e.g. C001 — only for CUSTOMER role
+  name         String   @db.VarChar(255)
+  email        String?  @db.VarChar(255)
+  username     String?  @unique @db.VarChar(100)
+  passwordHash String?  @map("password_hash") @db.VarChar(255)
+  mustChangePassword Boolean @default(false) @map("must_change_password")
+  roleId       Int      @map("role_id")
+  fcmToken     String?  @map("fcm_token") @db.Text
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  role Role @relation(fields: [roleId], references: [id])
+
+  addresses               Address[]
+  ordersAsCustomer        Order[]                @relation("CustomerOrders")
+  orderStatusChanges      OrderStatusHistory[]
+  reviews                 Review[]
+  deliveryAssignments     DeliveryAssignment[]
+  staffProfile            Staff?
+  inventoryLogs           InventoryLog[]
+
+  @@index([mobileNumber], name: "idx_users_mobile")
+  @@index([roleId], name: "idx_users_role")
+  @@map("users")
+}
+
+// ============================================
+// 2. ADDRESS MANAGEMENT
+// ============================================
+
+model City {
+  id        Int      @id @default(autoincrement())
+  name      String   @db.VarChar(100)
+  state     String   @db.VarChar(100)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  addresses              Address[]
+  facilities             Facility[]
+
+  @@map("cities")
+}
+
+model Address {
+  id           Int      @id @default(autoincrement())
+  userId       Int      @map("user_id")
+  houseFlatNo  String   @map("house_flat_no") @db.VarChar(100)
+  street       String   @db.VarChar(255)
+  landmark     String?  @db.VarChar(255)
+  pincode      String   @db.VarChar(10)
+  latitude     Decimal  @db.Decimal(10, 7)
+  longitude    Decimal  @db.Decimal(10, 7)
+  cityId       Int      @map("city_id")
+  isDefault    Boolean  @default(false) @map("is_default")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  user   User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  city   City  @relation(fields: [cityId], references: [id])
+
+  orders Order[]
+
+  @@index([latitude, longitude], name: "idx_addresses_lat_lng")
+  @@map("addresses")
+}
+
+// ============================================
+// 3. FACILITIES
+// ============================================
+
+model Facility {
+  id            Int      @id @default(autoincrement())
+  facilityCode  String   @unique @map("facility_code") @db.VarChar(50) // e.g. ANDHERI_WEST_01
+  name          String   @db.VarChar(255)
+  cityId        Int      @map("city_id")
+  address       String   @db.Text
+  latitude      Decimal  @db.Decimal(10, 7)
+  longitude     Decimal  @db.Decimal(10, 7)
+  contactNumber String   @map("contact_number") @db.VarChar(15)
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  city City @relation(fields: [cityId], references: [id])
+
+  staff         Staff[]
+  pickupSlots   PickupSlot[]
+  orders        Order[]
+  inventoryItems InventoryItem[]
+
+  @@index([latitude, longitude], name: "idx_facilities_lat_lng")
+  @@map("facilities")
+}
+
+model Staff {
+  id         Int      @id @default(autoincrement())
+  userId     Int      @unique @map("user_id")
+  employeeId String?  @unique @map("employee_id") @db.VarChar(20) // e.g. E001
+  facilityId Int?     @map("facility_id") // NULL for admin
+  roleId     Int      @map("role_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  facility Facility? @relation(fields: [facilityId], references: [id])
+
+  @@map("staff")
+}
+
+// ============================================
+// 4. PICKUP SLOTS
+// ============================================
+
+model PickupSlot {
+  id              Int      @id @default(autoincrement())
+  facilityId      Int      @map("facility_id")
+  slotDate        DateTime @map("slot_date") @db.Date
+  startTime       String   @map("start_time") @db.VarChar(10) // HH:MM format
+  endTime         String   @map("end_time") @db.VarChar(10)
+  maxCapacity     Int?     @map("max_capacity") @default(10) // Future use
+  currentBookings Int      @default(0) @map("current_bookings")
+  isActive        Boolean  @default(true) @map("is_active")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  facility Facility @relation(fields: [facilityId], references: [id])
+
+  orders Order[]
+
+  @@unique([facilityId, slotDate, startTime])
+  @@map("pickup_slots")
+}
+
+// ============================================
+// 5. ORDERS
+// ============================================
+
+model Order {
+  id             Int      @id @default(autoincrement())
+  orderNumber    String   @unique @map("order_number") @db.VarChar(50)
+  customerId     Int      @map("customer_id")
+  addressId      Int      @map("address_id")
+  facilityId     Int      @map("facility_id")
+  pickupSlotId   Int      @map("pickup_slot_id")
+  currentStatus  String   @map("current_status") @db.VarChar(50) // Enum from order lifecycle
+  serviceType    String   @map("service_type") @db.VarChar(50) // WASH_FOLD, DRY_CLEAN, IRON_ONLY
+  isExpress      Boolean  @default(false) @map("is_express")
+  initialWeight  Decimal? @map("initial_weight") @db.Decimal(10, 2) // kg
+  finalWeight    Decimal? @map("final_weight") @db.Decimal(10, 2) // kg
+  customerNotes  String?  @map("customer_notes") @db.Text
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  customer     User         @relation("CustomerOrders", fields: [customerId], references: [id])
+  address      Address      @relation(fields: [addressId], references: [id])
+  facility     Facility     @relation(fields: [facilityId], references: [id])
+  pickupSlot   PickupSlot   @relation(fields: [pickupSlotId], references: [id])
+
+  statusHistory       OrderStatusHistory[]
+  deliveryAssignments DeliveryAssignment[]
+  reviews             Review[]
+
+  @@index([customerId], name: "idx_orders_customer")
+  @@index([currentStatus], name: "idx_orders_status")
+  @@index([facilityId], name: "idx_orders_facility")
+  @@index([createdAt], name: "idx_orders_created")
+  @@map("orders")
+}
+
+model OrderStatusHistory {
+  id              Int      @id @default(autoincrement())
+  orderId         Int      @map("order_id")
+  status          String   @db.VarChar(50) // From order lifecycle
+  changedByUserId Int      @map("changed_by_user_id")
+  notes           String?  @db.Text
+  timestamp       DateTime @default(now())
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  order         Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  changedByUser User  @relation(fields: [changedByUserId], references: [id])
+
+  @@index([orderId], name: "idx_status_history_order")
+  @@index([timestamp], name: "idx_status_history_timestamp")
+  @@map("order_status_history")
+}
+
+// ============================================
+// 6. DELIVERY ASSIGNMENTS
+// ============================================
+
+model DeliveryAssignment {
+  id               Int       @id @default(autoincrement())
+  orderId          Int       @map("order_id")
+  driverId         Int       @map("driver_id")
+  assignmentType   String    @map("assignment_type") @db.VarChar(50) // PICKUP, DELIVERY
+  assignedByUserId Int       @map("assigned_by_user_id")
+  assignedAt       DateTime  @default(now()) @map("assigned_at")
+  status           String    @db.VarChar(50) // ASSIGNED, IN_PROGRESS, COMPLETED, FAILED
+  completedAt      DateTime? @map("completed_at")
+  notes            String?   @db.Text
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  order  Order @relation(fields: [orderId], references: [id])
+  driver User  @relation(fields: [driverId], references: [id])
+
+  @@index([driverId], name: "idx_delivery_driver")
+  @@index([orderId], name: "idx_delivery_order")
+  @@map("delivery_assignments")
+}
+
+// ============================================
+// 10. INVENTORY MANAGEMENT
+// ============================================
+
+model InventoryItem {
+  id                 Int      @id @default(autoincrement())
+  facilityId         Int      @map("facility_id")
+  itemName           String   @map("item_name") @db.VarChar(255)
+  category           String   @db.VarChar(50) // DETERGENT, PACKAGING, TAG, MACHINERY, MISC
+  quantity           Decimal  @db.Decimal(10, 2)
+  unit               String   @db.VarChar(50) // kg, pieces, liters, etc.
+  lowStockThreshold  Decimal  @map("low_stock_threshold") @db.Decimal(10, 2)
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  facility Facility        @relation(fields: [facilityId], references: [id])
+  logs     InventoryLog[]
+
+  @@map("inventory_items")
+}
+
+model InventoryLog {
+  id              Int      @id @default(autoincrement())
+  inventoryItemId Int      @map("inventory_item_id")
+  transactionType String   @map("transaction_type") @db.VarChar(50) // ADDITION, CONSUMPTION, ADJUSTMENT
+  quantityChange  Decimal  @map("quantity_change") @db.Decimal(10, 2)
+  balanceAfter    Decimal  @map("balance_after") @db.Decimal(10, 2)
+  notes           String?  @db.Text
+  createdByUserId Int      @map("created_by_user_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id])
+  createdByUser User          @relation(fields: [createdByUserId], references: [id])
+
+  @@map("inventory_logs")
+}
+
+// ============================================
+// 11. REVIEWS
+// ============================================
+
+model Review {
+  id         Int      @id @default(autoincrement())
+  orderId    Int      @map("order_id")
+  customerId Int      @map("customer_id")
+  rating     Int // 1-5
+  comment    String?  @db.Text
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  order    Order @relation(fields: [orderId], references: [id])
+  customer User  @relation(fields: [customerId], references: [id])
+
+  @@map("reviews")
+}
